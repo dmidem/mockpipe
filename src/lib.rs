@@ -70,7 +70,7 @@ impl SyncBuffer {
                 Some(timeout) => {
                     let (new_guard, timeout_result) = condvar
                         .wait_timeout_while(data_guard, timeout, condition)
-                        .unwrap();
+                        .map_err(|_| io::Error::from(io::ErrorKind::Other))?;
 
                     if timeout_result.timed_out() {
                         return Err(io::Error::from(io::ErrorKind::TimedOut));
@@ -78,7 +78,9 @@ impl SyncBuffer {
 
                     new_guard
                 }
-                None => condvar.wait_while(data_guard, condition).unwrap(),
+                None => condvar
+                    .wait_while(data_guard, condition)
+                    .map_err(|_| io::Error::from(io::ErrorKind::Other))?,
             };
         }
 
@@ -258,12 +260,12 @@ impl MockPipe {
     }
 
     /// Returns the number of bytes currently available to read from the buffer.
-    pub fn bytes_to_read(&self) -> usize {
+    pub fn read_buffer_len(&self) -> usize {
         self.read_buffer.len()
     }
 
     /// Returns the number of bytes currently queued to write in the buffer.
-    pub fn bytes_to_write(&self) -> usize {
+    pub fn write_buffer_len(&self) -> usize {
         self.write_buffer.len()
     }
 
@@ -296,7 +298,7 @@ impl io::Write for MockPipe {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.write_buffer.flush(self.timeout())
+        self.write_buffer.flush(None)
     }
 }
 
@@ -353,6 +355,51 @@ mod tests {
     }
 
     #[test]
+    fn test_bidirectional_exchange() {
+        let (mut pipe1, mut pipe2) = MockPipe::pair(1024);
+
+        let write_data11 = b"hello";
+        pipe1.write_all(write_data11).unwrap();
+
+        assert_eq!(pipe1.write_buffer_len(), 5);
+        assert_eq!(pipe1.read_buffer_len(), 0);
+        assert_eq!(pipe2.write_buffer_len(), 0);
+        assert_eq!(pipe2.read_buffer_len(), 5);
+
+        let write_data2 = b"ok";
+        pipe2.write_all(write_data2).unwrap();
+
+        assert_eq!(pipe1.write_buffer_len(), 5);
+        assert_eq!(pipe1.read_buffer_len(), 2);
+        assert_eq!(pipe2.write_buffer_len(), 2);
+        assert_eq!(pipe2.read_buffer_len(), 5);
+
+        let write_data12 = b"world";
+        pipe1.write_all(write_data12).unwrap();
+
+        assert_eq!(pipe1.write_buffer_len(), 10);
+        assert_eq!(pipe1.read_buffer_len(), 2);
+        assert_eq!(pipe2.write_buffer_len(), 2);
+        assert_eq!(pipe2.read_buffer_len(), 10);
+
+        // Partial reads
+
+        let mut read_data1 = [0u8; 1];
+        pipe1.read_exact(&mut read_data1).unwrap();
+
+        let mut read_data2 = [0u8; 7];
+        pipe2.read_exact(&mut read_data2).unwrap();
+
+        assert_eq!(pipe1.write_buffer_len(), 3);
+        assert_eq!(pipe1.read_buffer_len(), 1);
+        assert_eq!(pipe2.write_buffer_len(), 1);
+        assert_eq!(pipe2.read_buffer_len(), 3);
+
+        assert_eq!(&read_data1, b"o");
+        assert_eq!(&read_data2, b"hellowo");
+    }
+
+    #[test]
     fn test_zero_capacity_buffer() {
         let mut pipe = MockPipe::loopback(0);
 
@@ -383,9 +430,7 @@ mod tests {
     #[test]
     fn test_timeout_write() {
         // Small buffer
-        let mut pipe = MockPipe::loopback(5);
-
-        pipe.set_timeout(Some(Duration::from_millis(100)));
+        let mut pipe = MockPipe::loopback(5).with_timeout(Some(Duration::from_millis(100)));
 
         // Try to read from empty buffer; should timeout
         let mut read_data = [0u8; 5];
@@ -409,7 +454,14 @@ mod tests {
         let mut pipe = MockPipe::loopback(1024);
 
         pipe.write_all(b"test").unwrap();
+
+        assert_eq!(pipe.write_buffer_len(), 4);
+        assert_eq!(pipe.read_buffer_len(), 4);
+
         pipe.clear();
+
+        assert_eq!(pipe.write_buffer_len(), 0);
+        assert_eq!(pipe.read_buffer_len(), 0);
 
         // The pipe is empty, so reading should timeout
         let mut read_data = [0u8; 1];
@@ -425,19 +477,38 @@ mod tests {
 
         let (mut pipe1, mut pipe2) = MockPipe::pair(1024);
 
-        let write_data = b"hello";
+        let write_data1 = b"hello";
+        let write_data2 = b"hi";
 
         let writer = thread::spawn(move || {
-            pipe1.write_all(write_data).unwrap();
+            thread::sleep(time::Duration::from_millis(100));
+
+            pipe1.write_all(write_data1).unwrap();
+            assert_eq!(pipe1.write_buffer_len(), write_data1.len());
+
+            thread::sleep(time::Duration::from_millis(100));
+
+            pipe1.write_all(write_data2).unwrap();
+            assert_eq!(pipe1.write_buffer_len(), write_data2.len());
+
+            pipe1.flush().unwrap();
+            assert_eq!(pipe1.write_buffer_len(), 0);
         });
 
         let reader = thread::spawn(move || {
-            thread::sleep(time::Duration::from_millis(100));
+            pipe2.set_timeout(Some(Duration::from_millis(1000)));
 
             let mut read_data = [0u8; 5];
             pipe2.read_exact(&mut read_data).unwrap();
+            assert_eq!(&read_data, write_data1);
 
-            assert_eq!(&read_data, write_data);
+            thread::sleep(time::Duration::from_millis(200));
+
+            pipe2.set_timeout(Some(Duration::ZERO));
+
+            let mut read_data = [0u8; 2];
+            pipe2.read_exact(&mut read_data).unwrap();
+            assert_eq!(&read_data, write_data2);
         });
 
         writer.join().unwrap();

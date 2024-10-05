@@ -1,11 +1,11 @@
 [package]
 name = "mockpipe"
-version = "0.1.1"
+version = "0.1.6"
 edition = "2021"
 rust-version = "1.59.0"
 description = " A lightweight, thread-safe in-memory pipe, perfect for testing and mocking communication interfaces"
 authors = ["Dmitry Demin <dmitry.demin@outlook.com>"]
-license = "MIT"
+license = "MIT OR Apache-2.0"
 readme = "README.md"
 keywords = ["pipe", "io", "testing", "mocking"]
 repository = "https://github.com/dmidem/mockpipe"

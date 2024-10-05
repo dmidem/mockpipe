@@ -1,0 +1,50 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test_and_examples:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        rust: [stable]
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Install dependencies on Ubuntu
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
+
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        components: rustfmt, clippy
+        override: true
+ 
+    - name: Install dependencies
+      run: cargo fetch
+ 
+    - name: Run check
+      run: cargo check
+
+    - name: Run linting
+      run: cargo clippy --all-targets --all-features -- -D warnings
+
+    - name: Run tests
+      run: cargo test
+
+    - name: Build documentation
+      run: cargo doc --no-deps
+
+    - name: Test documentation examples
+      run: cargo test --doc
+        
+    - name: Run examples
+      run: |
+        cargo run --example loopback
+        cargo run --example pair_with_timeout
+        cargo run --example pair_with_threads

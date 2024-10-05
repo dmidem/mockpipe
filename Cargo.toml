@@ -1,0 +1,18 @@
+[package]
+name = "mockpipe"
+version = "0.1.1"
+edition = "2021"
+rust-version = "1.59.0"
+description = " A lightweight, thread-safe in-memory pipe, perfect for testing and mocking communication interfaces"
+authors = ["Dmitry Demin <dmitry.demin@outlook.com>"]
+license = "MIT"
+readme = "README.md"
+keywords = ["pipe", "io", "testing", "mocking"]
+repository = "https://github.com/dmidem/mockpipe"
+
+[dev-dependencies]
+criterion = "0.5.1"
+
+[[bench]]
+name = "read_write"
+harness = false
